@@ -31,6 +31,11 @@ class WeChat extends MessageGateway
      */
     protected $agentId;
 
+        /**
+     * @var integer 企业微信用户 ID
+     */
+    protected $userId;
+
     /**
      * @var Client
      */
@@ -46,6 +51,7 @@ class WeChat extends MessageGateway
         $this->corpId = config('message.wechat.corp_id');
         $this->corpSecret = config('message.wechat.corp_secret');
         $this->agentId = config('message.wechat.agent_id');
+        $this->userId = config('message.wechat.user_id');
 
         $this->accessTokenFile = DATA_PATH . DS . 'wechat_access_token.txt';
 
@@ -119,8 +125,14 @@ class WeChat extends MessageGateway
 
         if (isset($resp['errcode']) && $resp['errcode'] === 0 && isset($resp['access_token']) && isset($resp['expires_in'])) {
             $accessTokenFileText = sprintf("WECHAT_ACCESS_TOKEN=%s\nWECHAT_ACCESS_TOKEN_EXPIRES_AT=%s\n", $resp['access_token'], time() + $resp['expires_in']);
-            if (file_put_contents($this->accessTokenFile, $accessTokenFileText) === false) {
-                throw new \Exception(lang('100113') . $this->accessTokenFile);
+
+            // 检查 Data 目录是否有写入权限
+            if (is_writable(DATA_PATH)) {
+                if (file_put_contents($this->accessTokenFile, $accessTokenFileText) === false) {
+                    throw new \Exception(lang('100113') . $this->accessTokenFile);
+                }
+            } else {
+                system_log('由于 Data 目录没有写入权限，故无法缓存企业微信的 access_token');
             }
 
             return $resp['access_token'];
@@ -152,19 +164,13 @@ class WeChat extends MessageGateway
     /**
      * 获取页脚
      *
-     * @param bool $isRenewalResult 是否续期结果，续期结果不用提醒调整推送频率
-     *
      * @return string
      */
-    public function getFooter(bool $isRenewalResult = false)
+    public function getFooter()
     {
         $footer = '';
 
         $footer .= lang('100116');
-
-        if (!$isRenewalResult) {
-            $footer .= lang('100117');
-        }
 
         return $footer;
     }
@@ -220,7 +226,7 @@ class WeChat extends MessageGateway
         $text .= lang('100124');
         $text .= $this->genDomainStatusText($domainStatus);
 
-        $text .= $this->getFooter(true);
+        $text .= $this->getFooter();
 
         return $text;
     }
@@ -268,15 +274,21 @@ class WeChat extends MessageGateway
     {
         $this->check($content, $data);
 
+        $commonFooter = '';
+
         if ($type === 1 || $type === 4) {
-            // Do nothing
+            $this->setCommonFooter($commonFooter, "\n", false);
         } else if ($type === 2) {
+            $this->setCommonFooter($commonFooter, "\n", false);
             $content = $this->genDomainRenewalResultsText($data['username'], $data['renewalSuccessArr'], $data['renewalFailuresArr'], $data['domainStatusArr']);
         } else if ($type === 3) {
+            $this->setCommonFooter($commonFooter);
             $content = $this->genDomainStatusFullText($data['username'], $data['domainStatusArr']);
         } else {
             throw new \Exception(lang('100003'));
         }
+
+        $content .= $commonFooter;
 
         if ($subject !== '') {
             $content = $subject . "\n\n" . $content;
@@ -286,7 +298,7 @@ class WeChat extends MessageGateway
             $accessToken = $this->getAccessToken();
 
             $body = [
-                'touser' => '@all', // 可直接通过此地址获取 userId，指定接收用户，多个用户用“|”分割 https://qyapi.weixin.qq.com/cgi-bin/user/simplelist?access_token=ACCESS_TOKEN&fetch_child=FETCH_CHILD&department_id=1
+                'touser' => $this->userId, // 可直接通过此地址获取 userId，指定接收用户，多个用户用“|”分割 https://qyapi.weixin.qq.com/cgi-bin/user/simplelist?access_token=ACCESS_TOKEN&fetch_child=FETCH_CHILD&department_id=1
                 'msgtype' => 'text', // 消息类型，text 类型支持 a 标签以及 \n 换行，基本满足需求。由于腾讯要求 markdown 语法必须使用 企业微信APP 才能查看，不想安装，故弃之
                 'agentid' => $this->agentId, // 企业应用的 ID，整型，可在应用的设置页面查看
                 'text' => [
